@@ -4,7 +4,7 @@ import streamlit as st
 from openpyxl import Workbook
 
 st.set_page_config(page_title="Menu Cleaner", layout="wide")
-st.title("Menu Cleaner — duplicate GTIN detector (sorted duplicates)")
+st.title("Menu Cleaner — duplicate GTIN detector (custom sort)")
 
 uploaded = st.file_uploader("Upload CSV or XLSX file", type=["csv","xlsx"])
 if uploaded is None:
@@ -116,13 +116,14 @@ full_df = df_i[df_i["_suggest"] == "KEEP"].copy()
 dupes_df = df_i[ (df_i["_suggest"] == "DELETE") | ( (df_i["status"].str.startswith("missing")) & (~df_i["_dup"]) ) ].copy()
 
 # Sorting order for Duplicates_Only:
-# 1) missing gtin
-# 2) missing gtin+ duplicate
-# 3) duplicate
+# Desired new order:
+# 0) duplicate
+# 1) missing gtin+ duplicate
+# 2) missing gtin
 order_map = {
-    "missing gtin": 0,
+    "duplicate": 0,
     "missing gtin+ duplicate": 1,
-    "duplicate": 2
+    "missing gtin": 2
 }
 dupes_df["__sort"] = dupes_df["status"].map(order_map).fillna(99)
 # secondary sorting: by category then name for readability
@@ -157,4 +158,4 @@ original_columns = df.columns.tolist()
 excel_bytes = build_excel(full_df, dupes_df, original_columns)
 
 st.write(f"Rows total: {len(df_i)} — Kept: {len(full_df)} — Problematic shown: {len(dupes_df)}")
-st.download_button("Download cleaned Excel", excel_bytes.getvalue(), "menu_cleaner_compact_sorted.xlsx")
+st.download_button("Download cleaned Excel", excel_bytes.getvalue(), "menu_cleaner_custom_sorted.xlsx")
