@@ -4,7 +4,7 @@ import streamlit as st
 from openpyxl import Workbook
 
 st.set_page_config(page_title="Menu Cleaner", layout="wide")
-st.title("Menu Cleaner — duplicate GTIN detector (fixed: include missing-gtin in Duplicates_Only)")
+st.title("Menu Cleaner — duplicate GTIN detector (compact duplicates)")
 
 uploaded = st.file_uploader("Upload CSV or XLSX file", type=["csv","xlsx"])
 if uploaded is None:
@@ -109,13 +109,13 @@ for key, g in df_i[df_i["_dup_by_missing"]].groupby("_key_missing"):
     for idx in idxs[1:]:
         df_i.at[idx, "_suggest"] = "DELETE"
 
-# Full_Data: keep rows suggested KEEP (one per product) — includes non-problematic rows and first occurrence of problematic groups
+# Full_Data: keep rows suggested KEEP (one per product)
 full_df = df_i[df_i["_suggest"] == "KEEP"].copy()
 
-# Duplicates_Only: ALL problematic rows (status != ok)
-dupes_df = df_i[df_i["status"] != "ok"].copy()
+# Duplicates_Only: show either (a) rows suggested DELETE (redundant copies), OR (b) rows that are missing GTIN but NOT duplicates
+dupes_df = df_i[ (df_i["_suggest"] == "DELETE") | ( (df_i["status"].str.startswith("missing")) & (~df_i["_dup"]) ) ].copy()
 
-# Export: do not include internal helper columns; include original columns + status
+# Export: original columns + status (no internal helper columns)
 def build_excel(full_df, dupes_df, original_cols):
     out = io.BytesIO()
     wb = Workbook()
@@ -142,5 +142,5 @@ def build_excel(full_df, dupes_df, original_cols):
 original_columns = df.columns.tolist()
 excel_bytes = build_excel(full_df, dupes_df, original_columns)
 
-st.write(f"Rows total: {len(df_i)} — Kept: {len(full_df)} — Problematic rows: {len(dupes_df)}")
-st.download_button("Download cleaned Excel", excel_bytes.getvalue(), "menu_cleaner_fixed_missing.xlsx")
+st.write(f"Rows total: {len(df_i)} — Kept: {len(full_df)} — Problematic shown: {len(dupes_df)}")
+st.download_button("Download cleaned Excel", excel_bytes.getvalue(), "menu_cleaner_compact.xlsx")
