@@ -4,7 +4,7 @@ import streamlit as st
 from openpyxl import Workbook
 
 st.set_page_config(page_title="Menu Cleaner", layout="wide")
-st.title("Menu Cleaner — duplicate GTIN detector (final)")
+st.title("Menu Cleaner — handle missing-gtin vs gtin keeper (final)")
 
 uploaded = st.file_uploader("Upload CSV or XLSX file", type=["csv","xlsx"])
 if uploaded is None:
@@ -105,10 +105,10 @@ def compute_status(row):
 
 df_i["status"] = df_i.apply(compute_status, axis=1)
 
-# Suggest KEEP/DELETE: keep first occurrence per group
+# Suggest KEEP/DELETE: default KEEP
 df_i["_suggest"] = "KEEP"
 
-# 1) GTIN groups -> keep first occurrence
+# 1) GTIN groups -> keep first occurrence (prefer first occurrence)
 for key, g in df_i[df_i["_dup_by_gtin"]].groupby("_pair_gtin"):
     idxs = g.index.tolist()
     for idx in idxs[1:]:
@@ -120,19 +120,25 @@ for key, g in df_i[df_i["_dup_by_missing"]].groupby("_key_missing"):
     for idx in idxs[1:]:
         df_i.at[idx, "_suggest"] = "DELETE"
 
-# 3) Key-all groups (sku+name+category across all rows) -> keep a single keeper (prefer existing KEEP)
-# apply only for keys that appear >1
+# 3) Key-all groups (sku+name+category across all rows)
+# Choose keeper WITH PRIORITY: prefer a row that has a GTIN (non-empty _gtin). If multiple have GTIN, keep the first such.
 for key, g in df_i[df_i["_key_all"].map(lambda k: counts_key_all.get(k,0)>1)].groupby("_key_all"):
     idxs = g.index.tolist()
-    # choose keeper: prefer the first index that is currently KEEP, otherwise first index
+    # prefer keeper that has non-empty GTIN
     keeper = None
     for i in idxs:
-        if df_i.at[i, "_suggest"] == "KEEP":
+        if df_i.at[i, "_gtin"] != "":
             keeper = i
             break
+    # if none has GTIN, prefer existing KEEP, else first idx
+    if keeper is None:
+        for i in idxs:
+            if df_i.at[i, "_suggest"] == "KEEP":
+                keeper = i
+                break
     if keeper is None:
         keeper = idxs[0]
-    # mark others DELETE
+    # mark others DELETE (but do not delete the keeper)
     for idx in idxs:
         if idx != keeper:
             df_i.at[idx, "_suggest"] = "DELETE"
@@ -140,7 +146,7 @@ for key, g in df_i[df_i["_key_all"].map(lambda k: counts_key_all.get(k,0)>1)].gr
 # Full_Data: keep rows suggested KEEP (one per product)
 full_df = df_i[df_i["_suggest"] == "KEEP"].copy()
 
-# Duplicates_Only: include redundant copies (suggest==DELETE) OR any status that is missing (so we see missing-only and missing+duplicate)
+# Duplicates_Only: show redundant copies (suggest==DELETE) and also any missing rows (so we get missing-only and missing+duplicate)
 dupes_df = df_i[ (df_i["_suggest"] == "DELETE") | (df_i["status"].str.startswith("missing")) ].copy()
 
 # Sorting order for Duplicates_Only:
@@ -183,4 +189,4 @@ original_columns = df.columns.tolist()
 excel_bytes = build_excel(full_df, dupes_df, original_columns)
 
 st.write(f"Rows total: {len(df_i)} — Kept: {len(full_df)} — Problematic shown: {len(dupes_df)}")
-st.download_button("Download cleaned Excel", excel_bytes.getvalue(), "menu_cleaner_final.xlsx")
+st.download_button("Download cleaned Excel", excel_bytes.getvalue(), "menu_cleaner_handle_gtin_keeper.xlsx")
