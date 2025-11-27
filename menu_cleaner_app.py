@@ -2,11 +2,9 @@ import io
 import pandas as pd
 import streamlit as st
 from openpyxl import Workbook
-from openpyxl.styles import PatternFill
-from openpyxl.utils import get_column_letter
 
 st.set_page_config(page_title="Menu Cleaner", layout="wide")
-st.title("Menu Cleaner — duplicate GTIN detector (clean output, gtin hidden)")
+st.title("Menu Cleaner — duplicate GTIN detector")
 
 uploaded = st.file_uploader("Upload CSV or XLSX file", type=["csv","xlsx"])
 if uploaded is None:
@@ -29,12 +27,12 @@ for r in required:
         st.error(f"Missing column: {r}")
         st.stop()
 
-# Original column names (before modification)
-gtin_col = cols["gtin"]
-sku_col = cols["merchant_sku"]
-name_col = cols["name"]
-cat_col = cols["category_id"]
+gtin_col     = cols["gtin"]
+sku_col      = cols["merchant_sku"]
+name_col     = cols["name"]
+cat_col      = cols["category_id"]
 
+# Normalize GTIN
 def norm_gtin(v):
     if pd.isna(v):
         return ""
@@ -47,7 +45,7 @@ df_i = df.copy()
 df_i["_gtin"] = df_i[gtin_col].apply(norm_gtin)
 df_i["_missing"] = df_i["_gtin"] == ""
 
-# Build duplicate keys
+# Duplicate keys
 df_i["_pair_gtin"] = df_i["_gtin"] + "||" + df_i[cat_col].astype(str)
 
 def missing_key(row):
@@ -87,40 +85,39 @@ def status_text(r):
 
 df_i["status"] = df_i.apply(status_text, axis=1)
 
-# Keep one per product
+# Keep one per product group
 df_i["_suggest"] = "KEEP"
 
+# GTIN groups
 for key, g in df_i[df_i["_dup_by_gtin"]].groupby("_pair_gtin"):
     idxs = g.index.tolist()
-    keeper = idxs[0]
     for idx in idxs[1:]:
         df_i.at[idx, "_suggest"] = "DELETE"
 
+# Missing-GTIN groups
 for key, g in df_i[df_i["_dup_by_missing"]].groupby("_key_missing"):
     idxs = g.index.tolist()
-    keeper = idxs[0]
     for idx in idxs[1:]:
         df_i.at[idx, "_suggest"] = "DELETE"
 
-full_df = df_i[df_i["_suggest"] == "KEEP"].copy()
+full_df  = df_i[df_i["_suggest"] == "KEEP"].copy()
 dupes_df = df_i[df_i["_suggest"] == "DELETE"].copy()
 
-# Excel export without GTIN column
+# Excel export WITH gtin visible
 def build_excel(full_df, dupes_df, original_cols):
     out = io.BytesIO()
-    wb = Workbook()
+    wb  = Workbook()
 
-    # Columns to show (hide GTIN)
-    export_cols = [c for c in original_cols if c.lower() != "gtin"] + ["status"]
+    export_cols = original_cols + ["status"]
 
-    # Sheet 1: Duplicates_Only
+    # Duplicates_Only
     ws1 = wb.active
     ws1.title = "Duplicates_Only"
     ws1.append(export_cols)
     for _, r in dupes_df.iterrows():
         ws1.append([r.get(c, "") for c in export_cols])
 
-    # Sheet 2: Full_Data
+    # Full_Data
     ws2 = wb.create_sheet("Full_Data")
     ws2.append(export_cols)
     for _, r in full_df.iterrows():
