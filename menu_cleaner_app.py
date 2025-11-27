@@ -45,11 +45,17 @@ df_i["_missing"] = df_i["_gtin"] == ""
 df_i["_pair"] = df_i["_gtin"] + "||" + df_i[cat_col].astype(str)
 
 # Duplicate detection
-counts = df_i["_pair"].value_counts()
-df_i["_dup"] = df_i["_pair"].map(lambda x: counts.get(x,0)>1)
+# IMPORTANT FIX:
+# compute counts only for rows that have a non-empty GTIN,
+# so empty GTIN rows won't be considered duplicates.
+nonempty_pairs = df_i.loc[df_i["_gtin"] != "", "_pair"]
+counts = nonempty_pairs.value_counts()  # only counts for non-empty gtins
+df_i["_dup"] = df_i["_pair"].map(lambda x: counts.get(x, 0) > 1)
 
 # Define status text column (english labels)
 def get_status_text(row):
+    # note: we intentionally treat missing GTIN as separate from duplicates;
+    # a row with missing GTIN will not be marked duplicate even if another row also has missing GTIN+same category
     if row["_missing"] and row["_dup"]:
         return "missing gtin+ duplicate"
     elif row["_missing"]:
