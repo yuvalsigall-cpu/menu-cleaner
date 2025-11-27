@@ -4,7 +4,7 @@ import streamlit as st
 from openpyxl import Workbook
 
 st.set_page_config(page_title="Menu Cleaner", layout="wide")
-st.title("Menu Cleaner — duplicate GTIN detector (compact duplicates)")
+st.title("Menu Cleaner — duplicate GTIN detector (sorted duplicates)")
 
 uploaded = st.file_uploader("Upload CSV or XLSX file", type=["csv","xlsx"])
 if uploaded is None:
@@ -112,8 +112,22 @@ for key, g in df_i[df_i["_dup_by_missing"]].groupby("_key_missing"):
 # Full_Data: keep rows suggested KEEP (one per product)
 full_df = df_i[df_i["_suggest"] == "KEEP"].copy()
 
-# Duplicates_Only: show either (a) rows suggested DELETE (redundant copies), OR (b) rows that are missing GTIN but NOT duplicates
+# Duplicates_Only: include redundant copies OR non-duplicate missing-gtin rows
 dupes_df = df_i[ (df_i["_suggest"] == "DELETE") | ( (df_i["status"].str.startswith("missing")) & (~df_i["_dup"]) ) ].copy()
+
+# Sorting order for Duplicates_Only:
+# 1) missing gtin
+# 2) missing gtin+ duplicate
+# 3) duplicate
+order_map = {
+    "missing gtin": 0,
+    "missing gtin+ duplicate": 1,
+    "duplicate": 2
+}
+dupes_df["__sort"] = dupes_df["status"].map(order_map).fillna(99)
+# secondary sorting: by category then name for readability
+dupes_df = dupes_df.sort_values(["__sort", "_category_norm", name_col])
+dupes_df = dupes_df.drop(columns="__sort")
 
 # Export: original columns + status (no internal helper columns)
 def build_excel(full_df, dupes_df, original_cols):
@@ -143,4 +157,4 @@ original_columns = df.columns.tolist()
 excel_bytes = build_excel(full_df, dupes_df, original_columns)
 
 st.write(f"Rows total: {len(df_i)} — Kept: {len(full_df)} — Problematic shown: {len(dupes_df)}")
-st.download_button("Download cleaned Excel", excel_bytes.getvalue(), "menu_cleaner_compact.xlsx")
+st.download_button("Download cleaned Excel", excel_bytes.getvalue(), "menu_cleaner_compact_sorted.xlsx")
