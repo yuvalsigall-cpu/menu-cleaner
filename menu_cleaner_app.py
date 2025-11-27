@@ -4,7 +4,7 @@ import streamlit as st
 from openpyxl import Workbook
 
 st.set_page_config(page_title="Menu Cleaner", layout="wide")
-st.title("Menu Cleaner — duplicate GTIN detector (custom sort)")
+st.title("Menu Cleaner — duplicate GTIN detector (final)")
 
 uploaded = st.file_uploader("Upload CSV or XLSX file", type=["csv","xlsx"])
 if uploaded is None:
@@ -23,7 +23,7 @@ df = read_file(uploaded)
 cols = {c.strip().lower(): c for c in df.columns}
 
 # detect category column flexibly
-possible_category_keys = ["category_id", "category", "category name", "category_name", "cat", "cat_id"]
+possible_category_keys = ["category_id", "category", "category name", "category_name", "cat", "cat_id", "category-id", "catid"]
 cat_col = None
 for k in possible_category_keys:
     if k in cols:
@@ -74,6 +74,9 @@ def missing_key(row):
 
 df_i["_key_missing"] = df_i.apply(missing_key, axis=1)
 
+# NEW: key across ALL rows to match missing<>non-missing
+df_i["_key_all"] = df_i.apply(lambda row: f"{str(row.get(sku_col, '')).strip()}||{str(row.get(name_col, '')).strip()}||{str(row.get(cat_col, '')).strip()}", axis=1)
+
 # Counts (robust)
 nonempty = df_i.loc[df_i["_gtin"] != "", "_pair_gtin"]
 counts_gtin = nonempty.value_counts()
@@ -82,10 +85,16 @@ missing_keys = df_i.loc[df_i["_gtin"] == "", "_key_missing"]
 missing_keys_filtered = missing_keys[missing_keys.apply(lambda k: k.replace("|","").strip() != "")]
 counts_missing = missing_keys_filtered.value_counts()
 
+key_all_series = df_i["_key_all"]
+key_all_filtered = key_all_series[key_all_series.apply(lambda k: k.replace("|","").strip() != "")]
+counts_key_all = key_all_filtered.value_counts()
+
 # Duplicate flags
 df_i["_dup_by_gtin"] = df_i.apply(lambda r: (r["_gtin"] != "") and (counts_gtin.get(r["_pair_gtin"], 0) > 1), axis=1)
 df_i["_dup_by_missing"] = df_i.apply(lambda r: (r["_gtin"] == "") and ((r["_key_missing"].replace("|","").strip() != "") and (counts_missing.get(r["_key_missing"], 0) > 1)), axis=1)
-df_i["_dup"] = df_i["_dup_by_gtin"] | df_i["_dup_by_missing"]
+df_i["_dup_by_key_all"] = df_i["_key_all"].map(lambda k: counts_key_all.get(k, 0) > 1)
+
+df_i["_dup"] = df_i["_dup_by_gtin"] | df_i["_dup_by_missing"] | df_i["_dup_by_key_all"]
 
 # Deterministic status
 def compute_status(row):
@@ -99,27 +108,43 @@ df_i["status"] = df_i.apply(compute_status, axis=1)
 # Suggest KEEP/DELETE: keep first occurrence per group
 df_i["_suggest"] = "KEEP"
 
+# 1) GTIN groups -> keep first occurrence
 for key, g in df_i[df_i["_dup_by_gtin"]].groupby("_pair_gtin"):
     idxs = g.index.tolist()
     for idx in idxs[1:]:
         df_i.at[idx, "_suggest"] = "DELETE"
 
+# 2) Missing-GTIN groups (by key_missing) -> keep first occurrence
 for key, g in df_i[df_i["_dup_by_missing"]].groupby("_key_missing"):
     idxs = g.index.tolist()
     for idx in idxs[1:]:
         df_i.at[idx, "_suggest"] = "DELETE"
 
+# 3) Key-all groups (sku+name+category across all rows) -> keep a single keeper (prefer existing KEEP)
+# apply only for keys that appear >1
+for key, g in df_i[df_i["_key_all"].map(lambda k: counts_key_all.get(k,0)>1)].groupby("_key_all"):
+    idxs = g.index.tolist()
+    # choose keeper: prefer the first index that is currently KEEP, otherwise first index
+    keeper = None
+    for i in idxs:
+        if df_i.at[i, "_suggest"] == "KEEP":
+            keeper = i
+            break
+    if keeper is None:
+        keeper = idxs[0]
+    # mark others DELETE
+    for idx in idxs:
+        if idx != keeper:
+            df_i.at[idx, "_suggest"] = "DELETE"
+
 # Full_Data: keep rows suggested KEEP (one per product)
 full_df = df_i[df_i["_suggest"] == "KEEP"].copy()
 
-# Duplicates_Only: include redundant copies OR non-duplicate missing-gtin rows
-dupes_df = df_i[ (df_i["_suggest"] == "DELETE") | ( (df_i["status"].str.startswith("missing")) & (~df_i["_dup"]) ) ].copy()
+# Duplicates_Only: include redundant copies (suggest==DELETE) OR any status that is missing (so we see missing-only and missing+duplicate)
+dupes_df = df_i[ (df_i["_suggest"] == "DELETE") | (df_i["status"].str.startswith("missing")) ].copy()
 
 # Sorting order for Duplicates_Only:
-# Desired new order:
-# 0) duplicate
-# 1) missing gtin+ duplicate
-# 2) missing gtin
+# Desired order: duplicate (0), missing gtin+ duplicate (1), missing gtin (2)
 order_map = {
     "duplicate": 0,
     "missing gtin+ duplicate": 1,
@@ -127,7 +152,7 @@ order_map = {
 }
 dupes_df["__sort"] = dupes_df["status"].map(order_map).fillna(99)
 # secondary sorting: by category then name for readability
-dupes_df = dupes_df.sort_values(["__sort", "_category_norm", name_col])
+dupes_df = dupes_df.sort_values(["__sort", "_category_norm", name_col, sku_col])
 dupes_df = dupes_df.drop(columns="__sort")
 
 # Export: original columns + status (no internal helper columns)
@@ -158,4 +183,4 @@ original_columns = df.columns.tolist()
 excel_bytes = build_excel(full_df, dupes_df, original_columns)
 
 st.write(f"Rows total: {len(df_i)} — Kept: {len(full_df)} — Problematic shown: {len(dupes_df)}")
-st.download_button("Download cleaned Excel", excel_bytes.getvalue(), "menu_cleaner_custom_sorted.xlsx")
+st.download_button("Download cleaned Excel", excel_bytes.getvalue(), "menu_cleaner_final.xlsx")
