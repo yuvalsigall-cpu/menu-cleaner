@@ -2,7 +2,6 @@ import io
 import pandas as pd
 import streamlit as st
 from openpyxl import Workbook
-from openpyxl.styles import PatternFill
 
 st.set_page_config(page_title="Menu Cleaner", layout="wide")
 st.title("Menu Cleaner — duplicate GTIN detector")
@@ -49,67 +48,49 @@ df_i["_pair"] = df_i["_gtin"] + "||" + df_i[cat_col].astype(str)
 counts = df_i["_pair"].value_counts()
 df_i["_dup"] = df_i["_pair"].map(lambda x: counts.get(x,0)>1)
 
-# Define status for color logic
-def get_status(row):
+# Define status text column (english labels)
+def get_status_text(row):
     if row["_missing"] and row["_dup"]:
-        return "both"       # Missing GTIN + Duplicate
+        return "missing gtin+ duplicate"
     elif row["_missing"]:
-        return "missing"    # Missing GTIN only
+        return "missing gtin"
     elif row["_dup"]:
-        return "duplicate"  # Duplicate only
+        return "duplicate"
     else:
         return "ok"
 
-df_i["_status"] = df_i.apply(get_status, axis=1)
+df_i["status"] = df_i.apply(get_status_text, axis=1)
 
-# Excel export
+# Excel export (no colors, include status column)
 def build_excel(df, orig_cols):
     out = io.BytesIO()
     wb = Workbook()
 
-    red = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")     # Missing GTIN
-    orange = PatternFill(start_color="FFD966", end_color="FFD966", fill_type="solid")  # Duplicate
-    purple = PatternFill(start_color="DDA0DD", end_color="DDA0DD", fill_type="solid")  # Both
+    # Ensure status column included in order
+    export_cols = orig_cols + ["status"] if "status" not in orig_cols else orig_cols
 
+    # Duplicates_Only sheet (only problematic rows)
     ws1 = wb.active
     ws1.title = "Duplicates_Only"
-    ws1.append(orig_cols)
-    gtin_idx = orig_cols.index(gtin_col) + 1
+    ws1.append(export_cols)
 
-    filt = df[df["_status"] != "ok"]
-
+    filt = df[df["status"] != "ok"]
     for _, r in filt.iterrows():
-        row = [r.get(c, "") for c in orig_cols]
+        row = [r.get(c, "") for c in export_cols]
         ws1.append(row)
-        rr = ws1.max_row
 
-        if r["_status"] == "missing":
-            ws1.cell(rr, gtin_idx).fill = red
-        elif r["_status"] == "duplicate":
-            ws1.cell(rr, gtin_idx).fill = orange
-        elif r["_status"] == "both":
-            ws1.cell(rr, gtin_idx).fill = purple
-
+    # Full_Data sheet (all rows)
     ws2 = wb.create_sheet("Full_Data")
-    ws2.append(orig_cols)
-
+    ws2.append(export_cols)
     for _, r in df.iterrows():
-        row = [r.get(c, "") for c in orig_cols]
+        row = [r.get(c, "") for c in export_cols]
         ws2.append(row)
-        rr = ws2.max_row
-
-        if r["_status"] == "missing":
-            ws2.cell(rr, gtin_idx).fill = red
-        elif r["_status"] == "duplicate":
-            ws2.cell(rr, gtin_idx).fill = orange
-        elif r["_status"] == "both":
-            ws2.cell(rr, gtin_idx).fill = purple
 
     wb.save(out)
     out.seek(0)
     return out
 
-excel_bytes = build_excel(df_i, df.columns.tolist())
+excel_bytes = build_excel(df_i, df.columns.tolist() + (["status"] if "status" not in df.columns else []))
 
 st.download_button(
     "Download cleaned Excel",
